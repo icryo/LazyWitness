@@ -61,11 +61,17 @@ const RESOLUTION_PRESETS: &[(u32, u32, &str)] = &[
     (1280, 720, "720p"),
 ];
 
+// Port presets for scanning (matching gowitness)
+const SCAN_PORTS: &[u16] = &[
+    80, 443, 8080, 8443, 81, 3000, 3128, 8000, 8008, 8081, 8082, 8888, 8800, 10000,
+];
+
 #[derive(Default, PartialEq, Clone)]
 enum InputMode {
     #[default]
     Normal,
     UrlInput,
+    ScanInput,
 }
 
 struct App {
@@ -85,6 +91,7 @@ struct App {
     cached_size: (u16, u16),
     input_mode: InputMode,
     url_input: String,
+    scan_input: String,      // Host/IP for port scanning
     status_message: Option<String>,
     show_file_list: bool,
     show_text_pane: bool,    // Show readable text alongside image
@@ -116,6 +123,7 @@ impl App {
             cached_size: (0, 0),
             input_mode: InputMode::Normal,
             url_input: String::new(),
+            scan_input: String::new(),
             status_message: None,
             show_file_list: true,
             show_text_pane: false,
@@ -361,6 +369,97 @@ impl App {
         Ok(())
     }
 
+    fn scan_host(&mut self, input: &str, terminal: &mut DefaultTerminal) -> Result<()> {
+        use ipnet::IpNet;
+        use std::net::TcpStream;
+
+        let input = input.trim();
+        if input.is_empty() {
+            return Ok(());
+        }
+
+        // Collect hosts to scan - either from CIDR or single host
+        let hosts: Vec<String> = if input.contains('/') {
+            // Parse as CIDR
+            match input.parse::<IpNet>() {
+                Ok(net) => net.hosts().map(|ip| ip.to_string()).collect(),
+                Err(_) => {
+                    self.status_message = Some(format!("Invalid CIDR: {}", input));
+                    return Ok(());
+                }
+            }
+        } else {
+            // Single host - could be IP or hostname
+            vec![input.to_string()]
+        };
+
+        let total_hosts = hosts.len();
+        let ports = SCAN_PORTS;
+        let total_checks = total_hosts * ports.len();
+        let mut found = 0;
+        let mut checked = 0;
+
+        for host in &hosts {
+            for &port in ports {
+                checked += 1;
+                self.status_message = Some(format!(
+                    "[{}/{}] Scanning {}:{} ...",
+                    checked, total_checks, host, port
+                ));
+                terminal.draw(|frame| ui(frame, self))?;
+
+                // Quick TCP check before attempting screenshot
+                let addr = format!("{}:{}", host, port);
+                let socket_addr = match addr.parse() {
+                    Ok(a) => a,
+                    Err(_) => continue,
+                };
+
+                if TcpStream::connect_timeout(&socket_addr, Duration::from_millis(300)).is_err() {
+                    continue;
+                }
+
+                // Port is open, try both protocols
+                for scheme in &["https", "http"] {
+                    let url = format!("{}://{}:{}", scheme, host, port);
+                    self.status_message = Some(format!(
+                        "[{}/{}] Open! Capturing {}",
+                        checked, total_checks, url
+                    ));
+                    terminal.draw(|frame| ui(frame, self))?;
+
+                    let output_path = self.generate_screenshot_filename(&url);
+
+                    if self.capture_with_chrome(&url, &output_path).is_ok() {
+                        self.extract_readable_content(&url, &output_path);
+                        found += 1;
+                        self.status_message = Some(format!(
+                            "[{}/{}] Captured! ({} found)",
+                            checked, total_checks, found
+                        ));
+                        terminal.draw(|frame| ui(frame, self))?;
+                        break;
+                    }
+                }
+            }
+        }
+
+        self.refresh_images()?;
+        if total_hosts > 1 {
+            self.status_message = Some(format!(
+                "Scan complete: {} services on {} hosts",
+                found, total_hosts
+            ));
+        } else {
+            self.status_message = Some(format!(
+                "Scan complete: {} services found",
+                found
+            ));
+        }
+
+        Ok(())
+    }
+
     fn extract_readable_content(&self, url: &str, image_path: &PathBuf) {
         // Generate .txt path from image path
         let txt_path = image_path.with_extension("txt");
@@ -495,14 +594,28 @@ impl App {
     }
 
     fn capture_with_chrome(&self, url: &str, output_path: &PathBuf) -> Result<()> {
+        use std::ffi::OsStr;
+
         let chrome_path = Self::find_chrome()
             .ok_or_else(|| color_eyre::eyre::eyre!("Chrome/Chromium not found. Set CHROME_PATH or install chromium-browser"))?;
 
         let (width, height, _) = self.current_resolution();
+
+        // Anti-detection flags
+        let stealth_args: Vec<&OsStr> = vec![
+            OsStr::new("--disable-blink-features=AutomationControlled"),
+            OsStr::new("--disable-features=IsolateOrigins,site-per-process"),
+            OsStr::new("--disable-site-isolation-trials"),
+            OsStr::new("--disable-web-security"),
+            OsStr::new("--disable-features=BlockInsecurePrivateNetworkRequests"),
+            OsStr::new("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
+        ];
+
         let options = LaunchOptions::default_builder()
             .path(Some(chrome_path))
             .headless(true)
             .window_size(Some((width, height)))
+            .args(stealth_args)
             .build()
             .map_err(|e| color_eyre::eyre::eyre!("Failed to build launch options: {}", e))?;
 
@@ -513,6 +626,16 @@ impl App {
             .new_tab()
             .map_err(|e| color_eyre::eyre::eyre!("Failed to create tab: {}", e))?;
 
+        // Inject stealth JS before page loads
+        let _ = tab.evaluate(
+            r#"
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            window.chrome = { runtime: {} };
+            "#,
+            false,
+        );
+
         tab.navigate_to(url)
             .map_err(|e| color_eyre::eyre::eyre!("Failed to navigate: {}", e))?;
 
@@ -521,7 +644,7 @@ impl App {
             .map_err(|e| color_eyre::eyre::eyre!("Navigation timeout: {}", e))?;
 
         // Small delay for dynamic content
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(1000));
 
         // Capture screenshot as PNG
         let png_data = tab
@@ -799,6 +922,13 @@ fn run(mut terminal: DefaultTerminal, app: &mut App) -> Result<()> {
                         }
                     }
 
+                    // Port scan mode (gowitness-style)
+                    KeyCode::Char('g') => {
+                        app.input_mode = InputMode::ScanInput;
+                        app.scan_input.clear();
+                        app.status_message = None;
+                    }
+
                     _ => {}
                 },
                 InputMode::UrlInput => match key.code {
@@ -834,6 +964,29 @@ fn run(mut terminal: DefaultTerminal, app: &mut App) -> Result<()> {
                     }
                     KeyCode::Char(c) => {
                         app.url_input.push(c);
+                    }
+                    _ => {}
+                },
+                InputMode::ScanInput => match key.code {
+                    KeyCode::Enter => {
+                        if !app.scan_input.is_empty() {
+                            let host = app.scan_input.clone();
+                            app.input_mode = InputMode::Normal;
+                            app.scan_host(&host, &mut terminal)?;
+                        }
+                    }
+                    KeyCode::Esc => {
+                        app.input_mode = InputMode::Normal;
+                        app.scan_input.clear();
+                    }
+                    KeyCode::Backspace => {
+                        app.scan_input.pop();
+                    }
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app.scan_input.clear();
+                    }
+                    KeyCode::Char(c) => {
+                        app.scan_input.push(c);
                     }
                     _ => {}
                 },
@@ -884,9 +1037,11 @@ fn ui(frame: &mut Frame, app: &mut App) {
 
     render_status_bar(frame, app, main_chunks[1]);
 
-    // Render URL input popup if in input mode
-    if app.input_mode == InputMode::UrlInput {
-        render_url_input(frame, app);
+    // Render input popups
+    match app.input_mode {
+        InputMode::UrlInput => render_url_input(frame, app),
+        InputMode::ScanInput => render_scan_input(frame, app),
+        InputMode::Normal => {}
     }
 }
 
@@ -956,15 +1111,15 @@ fn render_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     let has_text = app.get_text_content().is_some();
     let help = if app.show_file_list {
         if has_text {
-            keybindings_line(&[("j/k", "nav"), ("WASD", "pan"), ("e/q", "zoom"), ("v", "text"), ("[]", "dens"), ("/", "url"), ("Esc", "quit")])
+            keybindings_line(&[("j/k", "nav"), ("WASD", "pan"), ("e/q", "zoom"), ("v", "text"), ("/", "url"), ("g", "scan"), ("Esc", "quit")])
         } else {
-            keybindings_line(&[("j/k", "nav"), ("WASD", "pan"), ("e/q", "zoom"), ("[]", "dens"), ("f", "reset"), ("/", "url"), ("Esc", "quit")])
+            keybindings_line(&[("j/k", "nav"), ("WASD", "pan"), ("e/q", "zoom"), ("[]", "dens"), ("/", "url"), ("g", "scan"), ("Esc", "quit")])
         }
     } else {
         if has_text {
-            keybindings_line(&[("Tab", "list"), ("j/k", "nav"), ("WASD", "pan"), ("e/q", "zoom"), ("v", "text"), ("[]", "dens"), ("/", "url"), ("Esc", "quit")])
+            keybindings_line(&[("Tab", "list"), ("WASD", "pan"), ("e/q", "zoom"), ("v", "text"), ("/", "url"), ("g", "scan"), ("Esc", "quit")])
         } else {
-            keybindings_line(&[("Tab", "list"), ("j/k", "nav"), ("WASD", "pan"), ("e/q", "zoom"), ("[]", "dens"), ("f", "reset"), ("/", "url"), ("Esc", "quit")])
+            keybindings_line(&[("Tab", "list"), ("WASD", "pan"), ("e/q", "zoom"), ("[]", "dens"), ("/", "url"), ("g", "scan"), ("Esc", "quit")])
         }
     };
 
@@ -1055,6 +1210,46 @@ fn render_url_input(frame: &mut Frame, app: &App) {
 
     // Show cursor
     let cursor_x = popup_area.x + 1 + app.url_input.len() as u16;
+    let cursor_y = popup_area.y + 1;
+    if cursor_x < popup_area.x + popup_area.width - 1 {
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
+}
+
+fn render_scan_input(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+
+    // Center popup
+    let popup_width = 55.min(area.width.saturating_sub(4));
+    let popup_height = 3;
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    // Clear the area behind popup
+    frame.render_widget(Clear, popup_area);
+
+    // Show placeholder if empty
+    let display_text = if app.scan_input.is_empty() {
+        Span::styled("192.168.1.0/24 or 10.0.0.1", Style::default().fg(theme::FG_DIM))
+    } else {
+        Span::styled(app.scan_input.as_str(), Style::default().fg(theme::FG))
+    };
+
+    let input = Paragraph::new(display_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::TEAL))
+                .title(" Scan Host/IP (14 common web ports) ")
+                .title_style(Style::default().fg(theme::LAVENDER).add_modifier(Modifier::BOLD)),
+        );
+
+    frame.render_widget(input, popup_area);
+
+    // Show cursor
+    let cursor_x = popup_area.x + 1 + app.scan_input.len() as u16;
     let cursor_y = popup_area.y + 1;
     if cursor_x < popup_area.x + popup_area.width - 1 {
         frame.set_cursor_position((cursor_x, cursor_y));
