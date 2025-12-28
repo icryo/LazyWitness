@@ -28,6 +28,14 @@ const DENSITY_PRESETS: &[(&str, &str)] = &[
     ("all", "All"),
 ];
 
+// Screenshot resolution presets (width, height, label)
+const RESOLUTION_PRESETS: &[(u32, u32, &str)] = &[
+    (1920, 1080, "1080p"),
+    (2560, 1440, "1440p"),
+    (3840, 2160, "4K"),
+    (1280, 720, "720p"),
+];
+
 #[derive(Default, PartialEq)]
 enum InputMode {
     #[default]
@@ -41,6 +49,7 @@ struct App {
     list_state: ListState,
     zoom_percent: u16,  // 100 = fit to window, >100 = zoomed in
     density_index: usize,  // index into DENSITY_PRESETS
+    resolution_index: usize,  // index into RESOLUTION_PRESETS
     scroll_offset: (u16, u16),  // (vertical, horizontal) scroll
     preview_cache: Option<Text<'static>>,
     cached_index: Option<usize>,
@@ -66,6 +75,7 @@ impl App {
             list_state,
             zoom_percent: 100,  // 100% = fit to window
             density_index: 3,   // "Mixed" default
+            resolution_index: 0, // 1080p default
             scroll_offset: (0, 0),
             preview_cache: None,
             cached_index: None,
@@ -207,6 +217,14 @@ impl App {
         DENSITY_PRESETS[self.density_index]
     }
 
+    fn resolution_cycle(&mut self) {
+        self.resolution_index = (self.resolution_index + 1) % RESOLUTION_PRESETS.len();
+    }
+
+    fn current_resolution(&self) -> (u32, u32, &str) {
+        RESOLUTION_PRESETS[self.resolution_index]
+    }
+
     fn generate_screenshot_filename(&self, url: &str) -> PathBuf {
         // Create filename from URL + timestamp
         let timestamp = SystemTime::now()
@@ -290,10 +308,11 @@ impl App {
         let chrome_path = Self::find_chrome()
             .ok_or_else(|| color_eyre::eyre::eyre!("Chrome/Chromium not found. Set CHROME_PATH or install chromium-browser"))?;
 
+        let (width, height, _) = self.current_resolution();
         let options = LaunchOptions::default_builder()
             .path(Some(chrome_path))
             .headless(true)
-            .window_size(Some((1920, 1080)))
+            .window_size(Some((width, height)))
             .build()
             .map_err(|e| color_eyre::eyre::eyre!("Failed to build launch options: {}", e))?;
 
@@ -455,6 +474,13 @@ fn run(mut terminal: DefaultTerminal, app: &mut App) -> Result<()> {
                         app.status_message = Some(format!("Density: {}", name));
                     }
 
+                    // Screenshot resolution: t cycles through presets
+                    KeyCode::Char('t') => {
+                        app.resolution_cycle();
+                        let (w, h, name) = app.current_resolution();
+                        app.status_message = Some(format!("Screenshot: {} ({}x{})", name, w, h));
+                    }
+
                     // Actions
                     KeyCode::Char('c') | KeyCode::Char('/') => {
                         app.input_mode = InputMode::UrlInput;
@@ -495,6 +521,10 @@ fn run(mut terminal: DefaultTerminal, app: &mut App) -> Result<()> {
                         } else {
                             app.url_input.clear();
                         }
+                    }
+                    KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Cycle resolution in URL input mode
+                        app.resolution_cycle();
                     }
                     KeyCode::Char(c) => {
                         app.url_input.push(c);
@@ -567,7 +597,7 @@ fn render_preview(frame: &mut Frame, app: &mut App, area: Rect) {
         None => " No image ".to_string(),
     };
 
-    let help = Line::raw(" ↑↓:nav  WASD:pan  e/q:zoom  []:density  f:fit  /:url  Esc:quit ");
+    let help = Line::raw(" ↑↓:nav  WASD:pan  e/q:zoom  []:density  t:res  /:url  Esc:quit ");
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -606,13 +636,14 @@ fn render_url_input(frame: &mut Frame, app: &App) {
     // Clear the area behind popup
     frame.render_widget(Clear, popup_area);
 
+    let (_, _, res_name) = app.current_resolution();
     let input = Paragraph::new(app.url_input.as_str())
         .style(Style::default().fg(Color::White))
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan))
-                .title(" Enter URL (Enter to capture, Esc to cancel) "),
+                .title(format!(" URL [{}] (Enter=capture, ^t=res, Esc=cancel) ", res_name)),
         );
 
     frame.render_widget(input, popup_area);
