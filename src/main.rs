@@ -96,6 +96,9 @@ struct App {
     show_file_list: bool,
     show_text_pane: bool,    // Show readable text alongside image
     text_scroll: u16,        // Scroll position for text pane
+    fullscreen: bool,        // Fullscreen mode (hide all panels)
+    prev_file_list: bool,    // Previous state before fullscreen
+    prev_text_pane: bool,    // Previous state before fullscreen
 }
 
 impl App {
@@ -128,7 +131,27 @@ impl App {
             show_file_list: true,
             show_text_pane: false,
             text_scroll: 0,
+            fullscreen: false,
+            prev_file_list: true,
+            prev_text_pane: false,
         })
+    }
+
+    fn toggle_fullscreen(&mut self) {
+        if self.fullscreen {
+            // Restore previous state
+            self.show_file_list = self.prev_file_list;
+            self.show_text_pane = self.prev_text_pane;
+            self.fullscreen = false;
+        } else {
+            // Save current state and go fullscreen
+            self.prev_file_list = self.show_file_list;
+            self.prev_text_pane = self.show_text_pane;
+            self.show_file_list = false;
+            self.show_text_pane = false;
+            self.fullscreen = true;
+        }
+        self.preview_cache = None; // Invalidate cache for resize
     }
 
     fn scan_images(dir: &PathBuf) -> Result<Vec<PathBuf>> {
@@ -859,9 +882,12 @@ fn run(mut terminal: DefaultTerminal, app: &mut App) -> Result<()> {
                     // Zoom: e = in (crop tighter), q = out (show more)
                     KeyCode::Char('e') | KeyCode::Char('+') | KeyCode::Char('=') => app.zoom_in(),
                     KeyCode::Char('q') | KeyCode::Char('-') | KeyCode::Char('_') => app.zoom_out(),
-                    KeyCode::Char('f') => {
+                    KeyCode::Char('F') => {
                         app.reset_view();
                         app.status_message = Some("View reset to 100%".to_string());
+                    }
+                    KeyCode::Char('f') => {
+                        app.toggle_fullscreen();
                     }
 
                     // Density: [ = sparser, ] = denser
@@ -1109,17 +1135,19 @@ fn render_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let has_text = app.get_text_content().is_some();
-    let help = if app.show_file_list {
+    let help = if app.fullscreen {
+        keybindings_line(&[("f", "exit full"), ("wasd", "pan"), ("e/q", "zoom"), ("/", "url"), ("g", "scan"), ("Esc", "quit")])
+    } else if app.show_file_list {
         if has_text {
-            keybindings_line(&[("j/k", "nav"), ("WASD", "pan"), ("e/q", "zoom"), ("v", "text"), ("/", "url"), ("g", "scan"), ("Esc", "quit")])
+            keybindings_line(&[("j/k", "nav"), ("wasd", "pan"), ("e/q", "zoom"), ("v", "text"), ("f", "full"), ("Esc", "quit")])
         } else {
-            keybindings_line(&[("j/k", "nav"), ("WASD", "pan"), ("e/q", "zoom"), ("[]", "dens"), ("/", "url"), ("g", "scan"), ("Esc", "quit")])
+            keybindings_line(&[("j/k", "nav"), ("wasd", "pan"), ("e/q", "zoom"), ("/", "url"), ("g", "scan"), ("f", "full"), ("Esc", "quit")])
         }
     } else {
         if has_text {
-            keybindings_line(&[("Tab", "list"), ("WASD", "pan"), ("e/q", "zoom"), ("v", "text"), ("/", "url"), ("g", "scan"), ("Esc", "quit")])
+            keybindings_line(&[("Tab", "list"), ("wasd", "pan"), ("e/q", "zoom"), ("v", "text"), ("f", "full"), ("Esc", "quit")])
         } else {
-            keybindings_line(&[("Tab", "list"), ("WASD", "pan"), ("e/q", "zoom"), ("[]", "dens"), ("/", "url"), ("g", "scan"), ("Esc", "quit")])
+            keybindings_line(&[("Tab", "list"), ("wasd", "pan"), ("e/q", "zoom"), ("/", "url"), ("g", "scan"), ("f", "full"), ("Esc", "quit")])
         }
     };
 
