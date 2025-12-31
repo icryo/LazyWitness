@@ -1117,18 +1117,14 @@ fn render_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner_width = area.width.saturating_sub(2);
     let inner_height = area.height.saturating_sub(2);
 
-    let preview_text = app.render_chafa(inner_width, inner_height);
-
-    let (_, density_name) = app.current_density();
-
-    // Build title showing zoom level and pan position
+    // Build title showing zoom level
     let title = match app.selected_image() {
         Some(path) => {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("???");
             if app.zoom_percent > 100 {
-                format!(" {} [{}% {} pan:{},{}] ", name, app.zoom_percent, density_name, app.pan_x, app.pan_y)
+                format!(" {} [{}% pan:{},{}] ", name, app.zoom_percent, app.pan_x, app.pan_y)
             } else {
-                format!(" {} [{}% {}] ", name, app.zoom_percent, density_name)
+                format!(" {} [{}%] ", name, app.zoom_percent)
             }
         }
         None => " No image ".to_string(),
@@ -1136,18 +1132,18 @@ fn render_preview(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let has_text = app.get_text_content().is_some();
     let help = if app.fullscreen {
-        keybindings_line(&[("f", "exit full"), ("wasd", "pan"), ("e/q", "zoom"), ("/", "url"), ("g", "scan"), ("Esc", "quit")])
+        keybindings_line(&[("f", "exit full"), ("wasd", "pan"), ("e/q", "zoom"), ("[]", "density"), ("Esc", "quit")])
     } else if app.show_file_list {
         if has_text {
-            keybindings_line(&[("j/k", "nav"), ("wasd", "pan"), ("e/q", "zoom"), ("v", "text"), ("f", "full"), ("Esc", "quit")])
+            keybindings_line(&[("j/k", "nav"), ("wasd", "pan"), ("e/q", "zoom"), ("v", "text"), ("Esc", "quit")])
         } else {
-            keybindings_line(&[("j/k", "nav"), ("wasd", "pan"), ("e/q", "zoom"), ("/", "url"), ("g", "scan"), ("f", "full"), ("Esc", "quit")])
+            keybindings_line(&[("j/k", "nav"), ("wasd", "pan"), ("e/q", "zoom"), ("[]", "density"), ("f", "full"), ("Esc", "quit")])
         }
     } else {
         if has_text {
-            keybindings_line(&[("Tab", "list"), ("wasd", "pan"), ("e/q", "zoom"), ("v", "text"), ("f", "full"), ("Esc", "quit")])
+            keybindings_line(&[("Tab", "list"), ("wasd", "pan"), ("e/q", "zoom"), ("v", "text"), ("Esc", "quit")])
         } else {
-            keybindings_line(&[("Tab", "list"), ("wasd", "pan"), ("e/q", "zoom"), ("/", "url"), ("g", "scan"), ("f", "full"), ("Esc", "quit")])
+            keybindings_line(&[("Tab", "list"), ("wasd", "pan"), ("e/q", "zoom"), ("[]", "density"), ("f", "full"), ("Esc", "quit")])
         }
     };
 
@@ -1158,6 +1154,7 @@ fn render_preview(frame: &mut Frame, app: &mut App, area: Rect) {
         .title_bottom(help)
         .border_style(Style::default().fg(theme::BORDER_FOCUSED));
 
+    let preview_text = app.render_chafa(inner_width, inner_height);
     let paragraph = Paragraph::new(preview_text).block(block);
     frame.render_widget(paragraph, area);
 }

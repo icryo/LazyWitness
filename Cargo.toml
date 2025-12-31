@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ratatui = "0.29"
+ratatui = "0.30"
 crossterm = "0.28"
-ansi-to-tui = "7"
+ansi-to-tui = "8"
 color-eyre = "0.6"
 headless_chrome = "1"
 readability-rust = "0.1"
