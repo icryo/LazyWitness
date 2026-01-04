@@ -1,1 +1,5 @@
 /target
+*.png
+*.txt
+*.db
+.claude/

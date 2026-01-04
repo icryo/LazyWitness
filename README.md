@@ -1,21 +1,26 @@
-# Towser
+# lazywitness
 
-TUI image browser with ASCII art rendering via chafa.
+TUI screenshot browser for web reconnaissance.
 
 ## Features
 
-- Browse and preview images as ASCII art
-- Zoom/pan with real image cropping
-- Screenshot websites via headless Chrome
-- Extract readable text from web pages
-- Catppuccin Mocha theme
+- Browse screenshots with native graphics or ASCII art
+- Capture URLs via headless Chrome
+- Scan hosts/CIDRs for web services
+- Extract readable text from pages
+- Default credentials detection
 
 ## Requirements
 
-- chafa
-- ImageMagick
-- Chromium (optional, for screenshots)
+- Chromium/Chrome
+- chafa (optional, for SSH/fallback rendering)
+
+## Usage
+
+```
+lazywitness [directory]
+```
 
 ## Keybindings
 
-`j/k` navigate | `wasd` pan | `e/q` zoom | `[]` density | `/` screenshot URL | `v` text | `Tab` toggle list | `Esc` quit
+`j/k` navigate | `^o` capture URL | `^s` scan | `/` filter | `?` help | `Esc` quit

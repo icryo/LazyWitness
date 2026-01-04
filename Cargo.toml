@@ -1,7 +1,12 @@
 [package]
-name = "imgbrowse"
+name = "lazywitness"
 version = "0.1.0"
 edition = "2021"
+description = "A lazy TUI for web screenshot browsing and capture"
+
+[[bin]]
+name = "lazywitness"
+path = "src/main.rs"
 
 [dependencies]
 ratatui = "0.30"
@@ -12,3 +17,12 @@ headless_chrome = "1"
 readability-rust = "0.1"
 ureq = "2"
 ipnet = "2"
+ratatui-image = { version = "10", default-features = false, features = ["crossterm", "image-defaults"] }
+image = "0.25"
+rayon = "1.10"
+image_hasher = "2"
+roxmltree = "0.20"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
