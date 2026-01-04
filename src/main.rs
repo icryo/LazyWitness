@@ -11,7 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     DefaultTerminal, Frame,
 };
-use ratatui_image::{picker::Picker, protocol::StatefulProtocol, Resize, StatefulImage, FilterType};
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol, Resize, StatefulImage};
 use rayon::prelude::*;
 use readability_rust::Readability;
 use regex::Regex;
@@ -921,7 +921,10 @@ impl App {
             self.show_text_pane = false;
             self.fullscreen = true;
         }
-        self.preview_cache = None; // Invalidate cache for resize
+        // Invalidate all caches for resize
+        self.preview_cache = None;
+        self.image_state = None;
+        self.native_render_size = (0, 0);
     }
 
     fn scan_images(dir: &PathBuf) -> Result<Vec<PathBuf>> {
@@ -961,6 +964,8 @@ impl App {
 
         // Invalidate caches
         self.preview_cache = None;
+        // Force filter cache rebuild by invalidating the pattern
+        self.cached_filter_pattern = "\x00".to_string(); // Invalid pattern forces rebuild
         self.update_filter_cache();
 
         Ok(())
@@ -1906,13 +1911,14 @@ impl App {
         let mut result_dims = None;
 
         if let (Some(picker), Some(img)) = (&mut self.picker, &self.loaded_image) {
-            // Apply crop if zoomed (this is our zoom implementation)
+            let (orig_w, orig_h) = (img.width(), img.height());
+
+            // Apply crop if zoomed, library will handle scaling via Resize::Scale
             let display_img = if let Some((x_pct, y_pct, w_pct, h_pct)) = crop_region {
-                let (img_w, img_h) = (img.width(), img.height());
-                let crop_x = (img_w * x_pct / 100) as u32;
-                let crop_y = (img_h * y_pct / 100) as u32;
-                let crop_w = (img_w * w_pct / 100).max(1) as u32;
-                let crop_h = (img_h * h_pct / 100).max(1) as u32;
+                let crop_x = (orig_w * x_pct / 100) as u32;
+                let crop_y = (orig_h * y_pct / 100) as u32;
+                let crop_w = (orig_w * w_pct / 100).max(1) as u32;
+                let crop_h = (orig_h * h_pct / 100).max(1) as u32;
                 img.crop_imm(crop_x, crop_y, crop_w, crop_h)
             } else {
                 img.clone()
@@ -1920,7 +1926,6 @@ impl App {
 
             result_dims = Some((display_img.width(), display_img.height()));
 
-            // Let ratatui-image handle the scaling to terminal size
             self.image_state = Some(picker.new_resize_protocol(display_img));
         }
 
@@ -2856,8 +2861,8 @@ fn render_preview(frame: &mut Frame, app: &mut App, area: Rect) {
             frame.render_widget(Clear, inner_area);
 
             if let Some(ref mut state) = app.image_state {
-                // Use Scale to fill the terminal area (ratatui-image handles aspect ratio)
-                let image_widget = StatefulImage::new().resize(Resize::Scale(Some(FilterType::Lanczos3)));
+                // Use Scale to ensure image fills the terminal area (upscales if needed)
+                let image_widget = StatefulImage::default().resize(Resize::Scale(None));
                 frame.render_stateful_widget(image_widget, inner_area, state);
             } else {
                 // Fallback if image failed to load
